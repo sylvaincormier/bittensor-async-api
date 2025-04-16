@@ -143,7 +143,7 @@ async def get_tao_dividends(netuid: str = DEFAULT_NETUID, hotkey: str = DEFAULT_
             
             # Get neuron info for the specified hotkey in the subnet
             neuron = await async_subtensor.get_neuron_for_pubkey_and_subnet(
-                pubkey=hotkey,
+                ss58_address=hotkey,  # Changed from pubkey=hotkey
                 netuid=netuid_int
             )
             
