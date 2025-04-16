@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any, List
 import time, os
 import logging
 import traceback
+import asyncio
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -53,11 +54,10 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     if token not in VALID_TOKENS:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
+            status_code=status.HTTP_403_FORBIDDEN,  # Change from 401 to 403
             detail="Invalid or missing token"
         )
     return token
-
 # Optional JWT token endpoint - only available if auth module is present
 if auth_available:
     @app.post("/token", response_model=Token)
@@ -177,6 +177,11 @@ async def health_check():
     client = bittensor_client.get_client()
     is_initialized = getattr(client, "is_initialized", False)
     
+    # Attempt to initialize if not already initialized
+    if not is_initialized:
+        # Try to initialize but don't wait for completion
+        asyncio.create_task(client.initialize())
+    
     status_info = {
         "status": "healthy" if is_initialized else "degraded",
         "bittensor_client": "initialized" if is_initialized else "not_initialized",
@@ -205,10 +210,11 @@ async def startup_event():
     
     # Initialize Bittensor client
     try:
-        await bittensor_client.initialize()
-        logger.info("Bittensor client initialized successfully")
+        # Don't await here - let it run in the background so startup isn't blocked
+        asyncio.create_task(bittensor_client.initialize())
+        logger.info("Bittensor client initialization task started")
     except Exception as e:
-        logger.error(f"Failed to initialize Bittensor client: {e}")
+        logger.error(f"Failed to start Bittensor client initialization: {e}")
         logger.error(traceback.format_exc())
         # Application will still start, but in degraded mode
 

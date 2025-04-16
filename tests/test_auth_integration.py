@@ -60,4 +60,4 @@ class TestAuthIntegration:
         assert "access_token" in data
         assert "token_type" in data
         
-        # In the future, we'll test using the JWT token here
+        # In the future, we'll test using the JWT token heregit log

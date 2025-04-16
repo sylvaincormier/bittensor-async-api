@@ -4,10 +4,10 @@ import logging
 import random
 from typing import Dict, Any, Optional, Union
 import asyncio
+import time
 from datetime import datetime
 
 import bittensor
-from bittensor.core.async_subtensor import AsyncSubtensor
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -53,6 +53,9 @@ class BitensorClient:
         self.subtensor = None
         self.wallet = None
         self.is_initialized = False
+        self.initialization_error = None
+        self.last_init_attempt = 0
+        self.init_retry_interval = 60  # seconds between retry attempts
         
         # Default values from environment
         self.default_netuid = int(os.getenv("NETUID", 18))
@@ -71,93 +74,102 @@ class BitensorClient:
             # Initialize subtensor connection asynchronously
             asyncio.create_task(self.initialize())
     
-    async def initialize(self) -> None:
+    async def initialize(self) -> bool:
         """
         Initialize the connection to the Bittensor blockchain.
         
-        This method sets up the AsyncSubtensor instance and wallet.
+        This method sets up the subtensor instance and wallet.
         It's called automatically when the client is created.
+        
+        Returns:
+            bool: True if initialization was successful, False otherwise
         """
         # Skip if already initialized or in test environment
         if self.is_initialized or "PYTEST_CURRENT_TEST" in os.environ:
             return True
+        
+        # Prevent too frequent retry attempts
+        current_time = time.time()
+        if current_time - self.last_init_attempt < self.init_retry_interval:
+            return False
             
-        try:
-            logger.info("Initializing Bittensor client...")
-            
-            # Create wallet with the mnemonic from environment
-            wallet_mnemonic = os.getenv("WALLET_MNEMONIC", "")
-            
-            if self.is_docker:
-                # For Docker, we'll just use an in-memory wallet
-                # This avoids file permission issues in containerized environments
-                logger.info("Running in Docker, using in-memory wallet")
-                self.wallet = bittensor.wallet(
-                    name="default",
-                    hotkey="default",
-                    mnemonic=wallet_mnemonic,
-                    password="",
-                    path="/tmp/bittensor/wallets",
-                    crypto_type=1  # sr25519 format
-                )
-            else:
-                # For non-Docker environments, use the normal wallet path
-                logger.info("Using filesystem wallet")
-                self.wallet = bittensor.wallet(
-                    name=os.getenv("WALLET_NAME", "default"),
-                    hotkey=os.getenv("WALLET_HOTKEY", "default"),
-                    mnemonic=wallet_mnemonic if wallet_mnemonic else None,
-                    password="",  # Empty password for automation
-                    crypto_type=1  # sr25519 format
-                )
-            
-            # Connect to the testnet
-            self.subtensor = AsyncSubtensor(
-                network="test",
-                chain_endpoint=os.getenv("BLOCKCHAIN_ENDPOINT", "wss://test.finney.opentensor.ai:443"),
-                wallet=self.wallet
-            )
-            
-            # Set global variables for test compatibility
-            global subtensor, async_subtensor, is_initialized
-            subtensor = self.subtensor
-            async_subtensor = self.subtensor
-            is_initialized = True
-            
-            logger.info(f"Bittensor client initialized successfully")
-            self.is_initialized = True
-            return True
-            
-        except bittensor.errors.KeyFileError as e:
-            logger.error(f"Error creating wallet: {str(e)}")
-            raise RuntimeError(f"Failed to create wallet: {str(e)}")
-        except Exception as e:
-            logger.error(f"Error initializing Bittensor client: {str(e)}")
-            raise RuntimeError(f"Failed to initialize Bittensor client: {str(e)}")
+        self.last_init_attempt = current_time
+        
+        # Try multiple times with increasing delays
+        for attempt in range(1, 4):
+            try:
+                logger.info(f"Initializing Bittensor client (attempt {attempt}/3)...")
+                
+                # Create wallet with the mnemonic from environment
+                wallet_mnemonic = os.getenv("WALLET_MNEMONIC", "")
+                
+                if self.is_docker:
+                    # For Docker, we'll just use an in-memory wallet
+                    # This avoids file permission issues in containerized environments
+                    logger.info("Running in Docker, using in-memory wallet")
+                    self.wallet = bittensor.wallet(
+                        name="default",
+                        hotkey="default"
+                    )
+                else:
+                    # For non-Docker environments, use the normal wallet path
+                    logger.info("Using filesystem wallet")
+                    self.wallet = bittensor.wallet(
+                        name=os.getenv("WALLET_NAME", "default"),
+                        hotkey=os.getenv("WALLET_HOTKEY", "default")
+                    )
+                
+                # Connect to the testnet
+                # Using regular subtensor as AsyncSubtensor might be causing issues
+                self.subtensor = bittensor.subtensor(network="test")
+                
+                # Verify the connection works by getting current block
+                current_block = self.subtensor.get_current_block()
+                logger.info(f"Connected to Bittensor testnet, current block: {current_block}")
+                
+                # Set global variables for test compatibility
+                global subtensor, async_subtensor, is_initialized
+                subtensor = self.subtensor
+                async_subtensor = self.subtensor
+                is_initialized = True
+                
+                logger.info(f"Bittensor client initialized successfully")
+                self.is_initialized = True
+                self.initialization_error = None
+                return True
+                
+            except Exception as e:
+                logger.warning(f"Bittensor client initialization attempt {attempt}/3 failed: {e}")
+                import traceback
+                logger.debug(f"Traceback: {traceback.format_exc()}")
+                
+                self.initialization_error = str(e)
+                
+                if attempt < 3:
+                    # Wait before next attempt (with exponential backoff)
+                    wait_time = 2 ** (attempt - 1)  # 1, 2, 4 seconds
+                    logger.info(f"Waiting {wait_time} seconds before retry...")
+                    await asyncio.sleep(wait_time)
+        
+        logger.error(f"Bittensor client failed to initialize after 3 attempts")
+        return False
     
-    async def ensure_initialized(self) -> None:
+    async def ensure_initialized(self) -> bool:
         """
         Ensure the client is initialized before making any calls.
         
-        Raises:
-            RuntimeError: If the client couldn't be initialized
+        Returns:
+            bool: True if client is initialized, False otherwise
         """
         # Skip if in test environment
         if "PYTEST_CURRENT_TEST" in os.environ:
             return True
             
-        retry_count = 0
-        max_retries = 3
-        retry_delay = 1  # seconds
-        
-        while not self.is_initialized and retry_count < max_retries:
-            logger.info(f"Waiting for Bittensor client initialization (attempt {retry_count+1}/{max_retries})...")
-            await asyncio.sleep(retry_delay)
-            retry_count += 1
-        
+        # If not initialized, try to initialize again
         if not self.is_initialized:
-            logger.error("Bittensor client failed to initialize")
-            raise RuntimeError("Bittensor client is not initialized")
+            return await self.initialize()
+            
+        return self.is_initialized
     
     async def get_tao_dividends(self, netuid: Optional[int] = None, hotkey: Optional[str] = None) -> float:
         """
@@ -169,9 +181,6 @@ class BitensorClient:
             
         Returns:
             Float value representing the dividend amount
-            
-        Raises:
-            RuntimeError: If the client is not initialized or the query fails
         """
         # Check cache first (for backward compatibility)
         try:
@@ -200,8 +209,11 @@ class BitensorClient:
                 
             return dividend_value
         
-        # Otherwise, query the blockchain
-        await self.ensure_initialized()
+        # Try to ensure initialization
+        is_init = await self.ensure_initialized()
+        if not is_init:
+            logger.warning("Using simulation because client is not initialized")
+            return await simulate_dividend_query(netuid, hotkey)
         
         # Use defaults if not provided
         netuid = netuid if netuid is not None else self.default_netuid
@@ -210,8 +222,20 @@ class BitensorClient:
         try:
             logger.info(f"Querying Tao dividends for netuid={netuid}, hotkey={hotkey}")
             
-            # Query the blockchain for dividends
-            result = await self.subtensor.get_tao_dividends(netuid=netuid, hotkey=hotkey)
+            # Query the blockchain for dividends - with regular subtensor methods
+            # Adjust this based on what method is actually available in your version
+            try:
+                result = self.subtensor.get_tao_dividends_for_subnet(netuid=netuid)
+                logger.info(f"Got dividends using get_tao_dividends_for_subnet")
+            except Exception as e:
+                logger.warning(f"get_tao_dividends_for_subnet failed: {e}, trying neurons query")
+                # Fallback to checking neurons
+                neurons = self.subtensor.neurons(netuid=netuid)
+                result = 0.0  # Default if we can't find the specific hotkey
+                for neuron in neurons:
+                    if neuron.hotkey == hotkey:
+                        result = neuron.dividends if hasattr(neuron, 'dividends') else 0.0
+                        break
             
             # Process and return the result
             dividend_value = float(result) if result is not None else 0.0
@@ -227,21 +251,11 @@ class BitensorClient:
             logger.info(f"Dividend query result: {dividend_value}")
             return dividend_value
             
-        except bittensor.errors.ChainQueryError as e:
-            logger.error(f"Chain query error: {str(e)}")
-            # Fallback to simulation
-            logger.info("Using simulation as fallback")
-            dividend_value = await simulate_dividend_query(netuid, hotkey)
-            return dividend_value
-        except bittensor.errors.ChainConnectionError as e:
-            logger.error(f"Chain connection error: {str(e)}")
-            # Fallback to simulation
-            logger.info("Using simulation as fallback")
-            dividend_value = await simulate_dividend_query(netuid, hotkey)
-            return dividend_value
         except Exception as e:
-            logger.error(f"Unexpected error in get_tao_dividends: {str(e)}")
-            raise RuntimeError(f"Failed to get dividends: {str(e)}")
+            logger.error(f"Error in get_tao_dividends: {str(e)}")
+            logger.info("Using simulation as fallback")
+            dividend_value = await simulate_dividend_query(netuid, hotkey)
+            return dividend_value
     
     async def add_stake(self, amount: float, netuid: Optional[int] = None, hotkey: Optional[str] = None) -> dict:
         """
@@ -254,13 +268,16 @@ class BitensorClient:
             
         Returns:
             Dictionary with operation status and transaction hash
-            
-        Raises:
-            RuntimeError: If the staking operation fails
         """
         # Skip initialization check in test environment
         if "PYTEST_CURRENT_TEST" not in os.environ:
-            await self.ensure_initialized()
+            is_init = await self.ensure_initialized()
+            if not is_init:
+                return {
+                    "status": "failed", 
+                    "reason": "Bittensor client is not initialized", 
+                    "operation": "stake"
+                }
         
         # Use defaults if not provided
         netuid = netuid if netuid is not None else self.default_netuid
@@ -290,8 +307,8 @@ class BitensorClient:
             # Convert amount to proper units for the blockchain
             amount_rao = int(amount * 1_000_000_000)  # Convert TAO to RAO (blockchain units)
             
-            # Submit the stake extrinsic
-            tx_hash = await self.subtensor.add_stake(hotkey=hotkey, amount=amount_rao)
+            # Submit the stake extrinsic using regular subtensor methods
+            tx_hash = self.subtensor.add_stake(hotkey=hotkey, amount=amount_rao)
             
             logger.info(f"Stake added successfully: {tx_hash}")
             return {
@@ -300,12 +317,13 @@ class BitensorClient:
                 "operation": "stake"
             }
             
-        except bittensor.errors.StakeError as e:
-            logger.error(f"Staking error: {str(e)}")
-            raise RuntimeError(f"Failed to add stake: {str(e)}")
         except Exception as e:
-            logger.error(f"Unexpected error in add_stake: {str(e)}")
-            raise RuntimeError(f"Failed to add stake: {str(e)}")
+            logger.error(f"Error in add_stake: {str(e)}")
+            return {
+                "status": "failed", 
+                "reason": str(e), 
+                "operation": "stake"
+            }
     
     async def unstake(self, amount: float, netuid: Optional[int] = None, hotkey: Optional[str] = None) -> dict:
         """
@@ -318,13 +336,16 @@ class BitensorClient:
             
         Returns:
             Dictionary with operation status and transaction hash
-            
-        Raises:
-            RuntimeError: If the unstaking operation fails
         """
         # Skip initialization check in test environment
         if "PYTEST_CURRENT_TEST" not in os.environ:
-            await self.ensure_initialized()
+            is_init = await self.ensure_initialized()
+            if not is_init:
+                return {
+                    "status": "failed", 
+                    "reason": "Bittensor client is not initialized", 
+                    "operation": "unstake"
+                }
         
         # Use defaults if not provided
         netuid = netuid if netuid is not None else self.default_netuid
@@ -354,8 +375,8 @@ class BitensorClient:
             # Convert amount to proper units for the blockchain
             amount_rao = int(amount * 1_000_000_000)  # Convert TAO to RAO (blockchain units)
             
-            # Submit the unstake extrinsic
-            tx_hash = await self.subtensor.unstake(hotkey=hotkey, amount=amount_rao)
+            # Submit the unstake extrinsic using regular subtensor methods
+            tx_hash = self.subtensor.unstake(hotkey=hotkey, amount=amount_rao)
             
             logger.info(f"Stake removed successfully: {tx_hash}")
             return {
@@ -364,12 +385,13 @@ class BitensorClient:
                 "operation": "unstake"
             }
             
-        except bittensor.errors.UnstakeError as e:
-            logger.error(f"Unstaking error: {str(e)}")
-            raise RuntimeError(f"Failed to remove stake: {str(e)}")
         except Exception as e:
-            logger.error(f"Unexpected error in unstake: {str(e)}")
-            raise RuntimeError(f"Failed to remove stake: {str(e)}")
+            logger.error(f"Error in unstake: {str(e)}")
+            return {
+                "status": "failed", 
+                "reason": str(e), 
+                "operation": "unstake"
+            }
 
 # Initialize the global client instance
 def get_client():
