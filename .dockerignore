@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+.Python
+.env
+.venv
+venv/
+data/
+*.sqlite3
+*.log
+.idea/
+.DS_Store
+AppleInternal/

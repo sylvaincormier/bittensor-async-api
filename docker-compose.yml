@@ -1,0 +1,69 @@
+version: '3.8'
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    command: uvicorn bittensor_async_app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      - IS_DOCKER=true
+      - REDIS_HOST=redis
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/bittensor
+      - API_TOKEN=datura
+      - DATURA_APIKEY=dt$q4qWC2K5mwT5BnNh0ZNF9MfeMDJenJ-pddsi_rE1FZ8
+      - CHUTES_API_KEY=cpk_9402c24cc755440b94f4b0931ebaa272.7a748b60e4a557f6957af9ce25778f49.8huXjHVlrSttzKuuY0yU2Fy4qEskr5J0
+      - WALLET_MNEMONIC=diamond like interest affair safe clarify lawsuit innocent beef van grief color
+      - WALLET_HOTKEY=default_hotkey_name
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - redis
+      - db
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: celery -A celery_worker worker --loglevel=info
+    environment:
+      - IS_DOCKER=true
+      - REDIS_HOST=redis
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/bittensor
+      - API_TOKEN=datura
+      - DATURA_APIKEY=dt$q4qWC2K5mwT5BnNh0ZNF9MfeMDJenJ-pddsi_rE1FZ8
+      - CHUTES_API_KEY=cpk_9402c24cc755440b94f4b0931ebaa272.7a748b60e4a557f6957af9ce25778f49.8huXjHVlrSttzKuuY0yU2Fy4qEskr5J0
+      - WALLET_MNEMONIC=diamond like interest affair safe clarify lawsuit innocent beef van grief color
+      - WALLET_HOTKEY=default_hotkey_name
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - redis
+      - db
+    restart: unless-stopped
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  db:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: bittensor
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
+  redis_data:
