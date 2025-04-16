@@ -1,6 +1,4 @@
-I'll create an updated README.md file that preserves the structure of the old one while incorporating the improvements we discussed:
 
-```markdown
 # Bittensor Async API
 
 An asynchronous API service for querying Tao dividends from the Bittensor blockchain with sentiment analysis-based trading capabilities.
@@ -183,11 +181,5 @@ MIT License
 ## Author
 
 Built by Silvereau
-```
 
-This README preserves the structure of the original while adding the improvements we discussed, including:
-1. Information about Docker container safety
-2. The actual curl commands needed for testing
-3. The wallet integration details
-4. The example API response
-5. Additional environment variables needed
+
