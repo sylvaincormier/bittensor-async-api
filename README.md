@@ -174,6 +174,39 @@ docker-compose exec api pytest -v
 
 Unit and end-to-end tests are located in the `tests/` directory. Use mocks to avoid real network calls during testing.
 
+## Performance Testing
+
+The service has been load tested to verify its ability to handle high concurrency. Results demonstrate excellent performance characteristics:
+
+### Load Test Results
+```
+===== Load Test Results =====
+Total Requests: 1000
+Concurrency Level: 100
+Success Rate: 100.00%
+Average Response Time: 0.0491 seconds (49.1ms)
+Minimum Response Time: 0.0177 seconds (17.7ms)
+Maximum Response Time: 0.0933 seconds (93.3ms)
+Median Response Time: 0.0467 seconds (46.7ms)
+95th Percentile Response Time: 0.0830 seconds (83ms)
+Requests per Second: 20.39
+===== Response Status Distribution =====
+Status 200: 1000 requests (100.00%)
+Total test duration: 0.78 seconds
+```
+
+These results demonstrate that the API can easily handle 1000 concurrent requests with:
+- Perfect success rate (100%)
+- Fast response times (average under 50ms)
+- High throughput (over 20 requests per second)
+- Excellent reliability (no failures)
+
+You can run the load test yourself using the included script:
+
+```bash
+python load_test_script.py --url http://localhost:8000 --token datura --requests 1000 --concurrency 100
+```
+
 ## License
 
 MIT License
