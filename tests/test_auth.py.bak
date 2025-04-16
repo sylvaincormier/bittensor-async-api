@@ -1,0 +1,104 @@
+import pytest
+from fastapi.testclient import TestClient
+from jose import jwt
+import os
+import time
+from unittest.mock import patch, MagicMock
+
+# Import your app and auth module
+from bittensor_async_app.main import app
+from bittensor_async_app.auth import SECRET_KEY, ALGORITHM, create_access_token
+
+client = TestClient(app)
+
+# Mock environment variables and services for testing
+@pytest.fixture(autouse=True)
+def mock_env_and_services():
+    """Mock environment variables and services."""
+    with patch.dict(os.environ, {"API_TOKEN": "test_token1,test_token2"}), \
+         patch("bittensor_async_app.services.bittensor_client.get_tao_dividends", 
+               return_value=0.05):
+        yield
+
+def test_health_endpoint():
+    """Test that health endpoint reports auth status."""
+    response = client.get("/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert "auth" in data
+    assert data["auth"] in ["jwt", "legacy"]
+
+def test_legacy_auth_success():
+    """Test that legacy authentication still works."""
+    response = client.get(
+        "/api/v1/tao_dividends?netuid=18&hotkey=test_key",
+        headers={"Authorization": "Bearer test_token1"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["netuid"] == "18"
+    assert data["hotkey"] == "test_key"
+    assert data["dividend_value"] == 0.05
+
+def test_legacy_auth_failure():
+    """Test that legacy authentication rejects invalid tokens."""
+    response = client.get(
+        "/api/v1/tao_dividends?netuid=18&hotkey=test_key",
+        headers={"Authorization": "Bearer invalid_token"}
+    )
+    assert response.status_code == 403
+
+def test_get_jwt_token():
+    """Test getting a JWT token from a legacy API token."""
+    response = client.post(
+        "/token",
+        headers={"Authorization": "Bearer test_token1"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "access_token" in data
+    assert data["token_type"] == "bearer"
+    
+    # Verify the token
+    token = data["access_token"]
+    payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    assert "sub" in payload
+    assert "exp" in payload
+    assert "scopes" in payload
+    assert "read" in payload["scopes"]
+
+def test_invalid_token_request():
+    """Test that invalid tokens are rejected for JWT conversion."""
+    response = client.post(
+        "/token",
+        headers={"Authorization": "Bearer invalid_token"}
+    )
+    assert response.status_code == 401
+
+def test_token_creation():
+    """Test token creation function directly."""
+    token_data = {"sub": "test_user", "scopes": ["read", "write"]}
+    token = create_access_token(token_data)
+    
+    # Decode and verify token
+    payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    assert payload["sub"] == "test_user"
+    assert payload["scopes"] == ["read", "write"]
+    assert payload["exp"] > int(time.time())  # Token should have future expiration
+
+def test_missing_auth_header():
+    """Test that missing auth header is properly handled."""
+    response = client.get("/api/v1/tao_dividends?netuid=18&hotkey=test_key")
+    assert response.status_code == 403
+    
+    response = client.post("/token")
+    assert response.status_code == 401
+
+def test_malformed_auth_header():
+    """Test that malformed auth header is properly handled."""
+    # Missing 'Bearer' prefix
+    response = client.post(
+        "/token",
+        headers={"Authorization": "test_token1"}
+    )
+    assert response.status_code == 401

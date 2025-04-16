@@ -17,6 +17,15 @@ import bittensor_async_app.services.bittensor_client as bittensor_client
 # Import Celery tasks
 from celery_worker import process_stake_operation
 
+# Import minimal auth module (comment out if it doesn't exist yet)
+try:
+    from bittensor_async_app.auth import initialize_from_env, create_access_token, Token
+    auth_available = True
+    logger.info("JWT authentication module available")
+except ImportError:
+    auth_available = False
+    logger.warning("JWT authentication module not available, using legacy auth only")
+
 app = FastAPI(
     title="Bittensor Async API",
     description="API to query Tao dividends and optionally stake TAO via a background task.",
@@ -48,6 +57,38 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
             detail="Invalid or missing token"
         )
     return token
+
+# Optional JWT token endpoint - only available if auth module is present
+if auth_available:
+    @app.post("/token", response_model=Token)
+    async def get_token(request: Request):
+        """Get a JWT token from a legacy API token."""
+        # Get Authorization header
+        auth_header = request.headers.get("Authorization")
+        
+        if not auth_header or not auth_header.startswith("Bearer "):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        # Extract token
+        token = auth_header.replace("Bearer ", "")
+        
+        # Check if it's a valid legacy token
+        if token in VALID_TOKENS:
+            # Create a JWT token with all permissions
+            access_token = create_access_token(
+                data={"sub": "api_user", "scopes": ["read", "stake", "admin"]}
+            )
+            return {"access_token": access_token, "token_type": "bearer"}
+        
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 @app.get("/api/v1/tao_dividends", response_model=TaoDividendResponse)
 async def get_tao_dividends_endpoint(
@@ -139,7 +180,8 @@ async def health_check():
     status_info = {
         "status": "healthy" if is_initialized else "degraded",
         "bittensor_client": "initialized" if is_initialized else "not_initialized",
-        "timestamp": time.time()
+        "timestamp": time.time(),
+        "auth": "jwt" if auth_available else "legacy"
     }
     
     # If client has an initialization error, include it
@@ -152,6 +194,14 @@ async def health_check():
 async def startup_event():
     """Initialize services on startup"""
     logger.info("Starting up application...")
+    
+    # Initialize auth if available
+    if auth_available:
+        try:
+            initialize_from_env()
+            logger.info("JWT authentication initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize JWT authentication: {e}")
     
     # Initialize Bittensor client
     try:
