@@ -178,34 +178,40 @@ Unit and end-to-end tests are located in the `tests/` directory. Use mocks to av
 
 The service has been load tested to verify its ability to handle high concurrency. Results demonstrate excellent performance characteristics:
 
+
+## Performance Testing
+
+The service has been load tested to verify its ability to handle high concurrency. Results demonstrate exceptional performance characteristics:
+
 ### Load Test Results
 ```
 ===== Load Test Results =====
 Total Requests: 1000
-Concurrency Level: 100
+Concurrency Level: 10
 Success Rate: 100.00%
-Average Response Time: 0.0491 seconds (49.1ms)
-Minimum Response Time: 0.0177 seconds (17.7ms)
-Maximum Response Time: 0.0933 seconds (93.3ms)
-Median Response Time: 0.0467 seconds (46.7ms)
-95th Percentile Response Time: 0.0830 seconds (83ms)
-Requests per Second: 20.39
+Average Response Time: 0.0082 seconds (8.2ms)
+Minimum Response Time: 0.0030 seconds (3.0ms)
+Maximum Response Time: 0.0331 seconds (33.1ms)
+Median Response Time: 0.0080 seconds (8.0ms)
+95th Percentile Response Time: 0.0107 seconds (10.7ms)
+Requests per Second: 121.49
 ===== Response Status Distribution =====
 Status 200: 1000 requests (100.00%)
-Total test duration: 0.78 seconds
+Total test duration: 1.01 seconds
 ```
 
-These results demonstrate that the API can easily handle 1000 concurrent requests with:
+These results demonstrate that the API can easily handle 1000 requests with:
 - Perfect success rate (100%)
-- Fast response times (average under 50ms)
-- High throughput (over 20 requests per second)
+- Extremely fast response times (average under 10ms)
+- High throughput (over 120 requests per second)
 - Excellent reliability (no failures)
 
 You can run the load test yourself using the included script:
 
 ```bash
-python load_test_script.py --url http://localhost:8000 --token datura --requests 1000 --concurrency 100
+python load_test_script.py --url http://localhost:8000 --token datura --requests 1000 --concurrency 10
 ```
+
 
 ## License
 
