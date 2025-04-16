@@ -171,7 +171,7 @@ class BitensorClient:
             
         return self.is_initialized
     
-    async def get_tao_dividends(self, netuid: Optional[int] = None, hotkey: Optional[str] = None) -> float:
+    async def get_tao_dividends(self, netuid: Optional[Union[int, str]] = None, hotkey: Optional[str] = None) -> float:
         """
         Get Tao dividends for a specific subnet and hotkey.
         
@@ -208,7 +208,7 @@ class BitensorClient:
                 logger.warning(f"Error caching result: {str(e)}")
                 
             return dividend_value
-        
+    
         # Try to ensure initialization
         is_init = await self.ensure_initialized()
         if not is_init:
@@ -219,26 +219,40 @@ class BitensorClient:
         netuid = netuid if netuid is not None else self.default_netuid
         hotkey = hotkey if hotkey is not None else self.default_hotkey
         
+        # Convert netuid to integer if it's a string
+        if isinstance(netuid, str):
+            try:
+                netuid = int(netuid)
+            except ValueError:
+                logger.warning(f"Invalid netuid format '{netuid}', using default")
+                netuid = self.default_netuid
+        
         try:
             logger.info(f"Querying Tao dividends for netuid={netuid}, hotkey={hotkey}")
             
-            # Query the blockchain for dividends - with regular subtensor methods
-            # Adjust this based on what method is actually available in your version
-            try:
-                result = self.subtensor.get_tao_dividends_for_subnet(netuid=netuid)
-                logger.info(f"Got dividends using get_tao_dividends_for_subnet")
-            except Exception as e:
-                logger.warning(f"get_tao_dividends_for_subnet failed: {e}, trying neurons query")
-                # Fallback to checking neurons
-                neurons = self.subtensor.neurons(netuid=netuid)
-                result = 0.0  # Default if we can't find the specific hotkey
-                for neuron in neurons:
-                    if neuron.hotkey == hotkey:
-                        result = neuron.dividends if hasattr(neuron, 'dividends') else 0.0
-                        break
+            # Query neurons directly since get_tao_dividends_for_subnet isn't available
+            neurons = self.subtensor.neurons(netuid=netuid)
+            logger.info(f"Found {len(neurons)} neurons on subnet {netuid}")
             
-            # Process and return the result
-            dividend_value = float(result) if result is not None else 0.0
+            # Look for the specific hotkey
+            dividend_value = 0.0
+            found_neuron = False
+            
+            for neuron in neurons:
+                if hasattr(neuron, 'hotkey') and neuron.hotkey == hotkey:
+                    if hasattr(neuron, 'dividends'):
+                        dividend_value = float(neuron.dividends)
+                    elif hasattr(neuron, 'dividend'):
+                        dividend_value = float(neuron.dividend)
+                    elif hasattr(neuron, 'total_dividend'):
+                        dividend_value = float(neuron.total_dividend)
+                    
+                    found_neuron = True
+                    logger.info(f"Found neuron for hotkey {hotkey} with dividend {dividend_value}")
+                    break
+            
+            if not found_neuron:
+                logger.warning(f"No neuron found for hotkey {hotkey} on subnet {netuid}")
             
             # Try to cache the result
             try:

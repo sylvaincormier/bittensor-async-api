@@ -58,6 +58,7 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
             detail="Invalid or missing token"
         )
     return token
+
 # Optional JWT token endpoint - only available if auth module is present
 if auth_available:
     @app.post("/token", response_model=Token)
@@ -108,19 +109,26 @@ async def get_tao_dividends_endpoint(
     start_time = time.time()
     client_ip = request.client.host if request.client else "unknown"
     
-    logger.info(f"Dividend request from {client_ip}: netuid={netuid}, hotkey={hotkey}, trade={trade}")
+    # Convert netuid to integer if possible
+    try:
+        netuid_int = int(netuid)
+    except ValueError:
+        logger.warning(f"Invalid netuid format: {netuid}, using as string")
+        netuid_int = netuid  # Keep as string if can't be converted
+    
+    logger.info(f"Dividend request from {client_ip}: netuid={netuid_int}, hotkey={hotkey}, trade={trade}")
     
     try:
-        # Get dividend data
-        dividend_value = await async_get_tao_dividends(netuid, hotkey)
+        # Get dividend data with the correct netuid type
+        dividend_value = await async_get_tao_dividends(netuid_int, hotkey)
         logger.info(f"Dividend value retrieved: {dividend_value}")
         
         response_data = {
-            "netuid": netuid,
+            "netuid": str(netuid),  # Convert back to string for response
             "hotkey": hotkey,
             "dividend_value": dividend_value,
             "timestamp": time.time(),
-            "trade_triggered": trade,
+            "trade_triggered": False,
             "message": "No stake triggered.",
             "status": "success"
         }
@@ -131,7 +139,7 @@ async def get_tao_dividends_endpoint(
                 logger.info(f"Triggering background task for trade=true")
                 # Use apply_async with a timeout to prevent hanging
                 task = process_stake_operation.apply_async(
-                    args=[netuid, hotkey],
+                    args=[netuid_int, hotkey],
                     expires=60  # 60 second expiration
                 )
                 logger.info(f"Background task triggered successfully: {task.id}")
