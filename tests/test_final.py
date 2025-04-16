@@ -136,3 +136,51 @@ def test_unauthorized_access():
     
     response = client.get("/api/v1/tao_dividends?netuid=18")
     assert response.status_code == 403  # Updated from 401 to 403
+@pytest.mark.asyncio
+async def test_get_tao_dividends_real_blockchain():
+    """Test get_tao_dividends with real blockchain integration"""
+    from bittensor_async_app.services.bittensor_client import get_tao_dividends
+    
+    # Create mocks for blockchain API responses
+    mock_neuron = MagicMock()
+    mock_neuron.uid = 5
+    
+    # Mock AsyncSubtensor methods
+    async_subtensor_mock = MagicMock()
+    async_subtensor_mock.get_neuron_for_pubkey_and_subnet = AsyncMock(return_value=mock_neuron)
+    async_subtensor_mock.get_total_stake_for_neuron = AsyncMock(return_value=100.0)
+    async_subtensor_mock.get_total_stake_for_subnet = AsyncMock(return_value=1000.0)
+    async_subtensor_mock.get_emission_value_by_subnet = AsyncMock(return_value=2.5)
+    
+    # Create redis mock for empty cache
+    redis_mock = MagicMock()
+    redis_mock.get = AsyncMock(return_value=None)
+    redis_mock.set = AsyncMock(return_value=True)
+    
+    # Patch the necessary components
+    with patch("bittensor_async_app.services.bittensor_client.redis_client", redis_mock), \
+         patch("bittensor_async_app.services.bittensor_client.async_subtensor", async_subtensor_mock), \
+         patch.dict(os.environ, {"PYTEST_CURRENT_TEST": ""}):  # Remove test env var to force real calculation
+        
+        # Call the function
+        result = await get_tao_dividends("18", "test_hotkey")
+        
+        # Expected calculation: (100.0 / 1000.0) * 2.5 = 0.25
+        assert result == 0.25
+        
+        # Verify blockchain methods were called
+        async_subtensor_mock.get_neuron_for_pubkey_and_subnet.assert_called_once_with(
+            pubkey="test_hotkey", netuid=18
+        )
+        async_subtensor_mock.get_total_stake_for_neuron.assert_called_once_with(
+            netuid=18, uid=5
+        )
+        async_subtensor_mock.get_total_stake_for_subnet.assert_called_once_with(
+            netuid=18
+        )
+        async_subtensor_mock.get_emission_value_by_subnet.assert_called_once_with(
+            netuid=18
+        )
+        
+        # Verify caching behavior
+        redis_mock.set.assert_called_once()
