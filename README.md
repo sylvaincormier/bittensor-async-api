@@ -1,4 +1,4 @@
-```markdown
+
 # Bittensor Async API
 
 An asynchronous API service for querying Tao dividends from the Bittensor blockchain with sentiment analysis-based trading capabilities.
@@ -181,5 +181,5 @@ MIT License
 ## Author
 
 Built by Silvereau
-```
+
 
