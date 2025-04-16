@@ -1,9 +1,10 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 import time, os
 import logging
+import traceback
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -25,7 +26,7 @@ app = FastAPI(
 security = HTTPBearer()
 
 # Load token from environment or use default for development
-VALID_TOKENS = {os.getenv("API_TOKEN", "datura")}
+VALID_TOKENS = set([token.strip() for token in os.getenv("API_TOKEN", "datura").split(",")])
 
 class TaoDividendResponse(BaseModel):
     """Response model for /api/v1/tao_dividends endpoint."""
@@ -36,19 +37,21 @@ class TaoDividendResponse(BaseModel):
     trade_triggered: bool
     message: str
     task_id: Optional[str] = None
+    status: Optional[str] = None
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Simple Bearer token verification."""
     token = credentials.credentials
     if token not in VALID_TOKENS:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid or missing token"
         )
     return token
 
 @app.get("/api/v1/tao_dividends", response_model=TaoDividendResponse)
 async def get_tao_dividends_endpoint(
+    request: Request,
     netuid: str = "18",
     hotkey: str = "5FFApaS75bv5pJHfAp2FVLBj9ZaXuFDjEypsaBNc1wCfe52v",
     trade: bool = False,
@@ -61,9 +64,12 @@ async def get_tao_dividends_endpoint(
     - **hotkey**: Hotkey address (default: 5FFApaS75bv5pJHfAp2FVLBj9ZaXuFDjEypsaBNc1wCfe52v)
     - **trade**: Whether to trigger stake/unstake based on sentiment (default: false)
     """
+    start_time = time.time()
+    client_ip = request.client.host if request.client else "unknown"
+    
+    logger.info(f"Dividend request from {client_ip}: netuid={netuid}, hotkey={hotkey}, trade={trade}")
+    
     try:
-        logger.info(f"Processing dividend request: netuid={netuid}, hotkey={hotkey}, trade={trade}")
-        
         # Get dividend data
         dividend_value = await async_get_tao_dividends(netuid, hotkey)
         logger.info(f"Dividend value retrieved: {dividend_value}")
@@ -74,7 +80,8 @@ async def get_tao_dividends_endpoint(
             "dividend_value": dividend_value,
             "timestamp": time.time(),
             "trade_triggered": trade,
-            "message": "No stake triggered."
+            "message": "No stake triggered.",
+            "status": "success"
         }
         
         # If trade flag is set, trigger background task using Celery
@@ -93,18 +100,53 @@ async def get_tao_dividends_endpoint(
                 response_data["message"] = "Stake operation triggered in background."
             except Exception as e:
                 logger.error(f"Failed to trigger background task: {e}")
+                logger.error(traceback.format_exc())
                 response_data["message"] = f"Failed to trigger stake operation: {str(e)}"
+                response_data["status"] = "partial_success"
+        
+        # Add processing time to logs
+        processing_time = time.time() - start_time
+        logger.info(f"Processed dividend request in {processing_time:.4f}s")
         
         return response_data
         
     except Exception as e:
-        logger.error(f"Failed to get tao dividends: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # Log the error with traceback
+        logger.error(f"Error processing dividend request: {str(e)}")
+        logger.error(traceback.format_exc())
+        
+        # Instead of returning a 500 error, return a graceful response with simulated data
+        processing_time = time.time() - start_time
+        logger.info(f"Failed request processed in {processing_time:.4f}s")
+        
+        return {
+            "netuid": netuid,
+            "hotkey": hotkey,
+            "dividend_value": 0.0,  # Default value when there's an error
+            "timestamp": time.time(),
+            "trade_triggered": False,
+            "message": f"Service is experiencing temporary issues: {str(e)}",
+            "status": "simulated"
+        }
 
 # Health check endpoint
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    # Check if Bittensor client is initialized
+    client = bittensor_client.get_client()
+    is_initialized = getattr(client, "is_initialized", False)
+    
+    status_info = {
+        "status": "healthy" if is_initialized else "degraded",
+        "bittensor_client": "initialized" if is_initialized else "not_initialized",
+        "timestamp": time.time()
+    }
+    
+    # If client has an initialization error, include it
+    if hasattr(client, "initialization_error") and client.initialization_error:
+        status_info["error"] = client.initialization_error
+    
+    return status_info
 
 @app.on_event("startup")
 async def startup_event():
@@ -117,6 +159,8 @@ async def startup_event():
         logger.info("Bittensor client initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize Bittensor client: {e}")
+        logger.error(traceback.format_exc())
+        # Application will still start, but in degraded mode
 
 if __name__ == "__main__":
     import uvicorn

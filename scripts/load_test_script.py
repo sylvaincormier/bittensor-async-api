@@ -11,6 +11,7 @@ import asyncio
 import logging
 import time
 import statistics
+import os
 from typing import Dict, List, Tuple, Optional
 from collections import Counter, defaultdict
 
@@ -165,15 +166,18 @@ async def main():
     """Main entry point for the load test script."""
     args = parse_args()
     
-    # Get token from environment if not provided
-    import os
-    auth_token = args.token or os.getenv("API_TOKEN", "datura")
+    # Get token from environment if not provided, with no default value
+    # This forces users to either provide token via CLI argument or environment variable
+    auth_token = args.token or os.getenv("API_TOKEN")
+    
+    if not auth_token:
+        logger.error("No authentication token provided. Use --token argument or set API_TOKEN environment variable")
+        return
     
     # Set up request parameters
     params = {
         "netuid": args.netuid,
-        "hotkey": args.hotkey,
-        "trade": "false"
+        "hotkey": args.hotkey
     }
     
     # Create and run load tester
