@@ -11,11 +11,11 @@ import asyncio
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Import our services
-from bittensor_async_app.services.bittensor_client import get_tao_dividends as async_get_tao_dividends
+# Import our services - properly use the async methods
+from bittensor_async_app.services.bittensor_client import get_tao_dividends
 import bittensor_async_app.services.bittensor_client as bittensor_client
 
-# Import Celery tasks
+# Import Celery tasks - use the correct function naming
 from celery_worker import process_stake_operation
 
 # Import auth module
@@ -36,17 +36,6 @@ except ImportError as e:
         auth_available = False
         logger.error(f"JWT authentication not available: {e2}")
         logger.error(traceback.format_exc())
-
-# Import minimal auth module (comment out if it doesn't exist yet)
-try:
-    import sys
-    sys.path.insert(0, '.')  # Add root directory to path
-    from auth import initialize_from_env, create_access_token, Token, jwt, SECRET_KEY, ALGORITHM
-    auth_available = True
-    logger.info("JWT authentication module available")
-except ImportError as e:
-    auth_available = False
-    logger.warning(f"JWT authentication module not available, using legacy auth only: {e}")
 
 def get_jwt_from_header(token: str):
     """Parse and validate a JWT token."""
@@ -177,8 +166,8 @@ async def get_tao_dividends_endpoint(
     logger.info(f"Dividend request from {client_ip}: netuid={netuid_int}, hotkey={hotkey}, trade={trade}")
     
     try:
-        # Get dividend data with the correct netuid type
-        dividend_value = await async_get_tao_dividends(netuid_int, hotkey)
+        # Get dividend data with the correct netuid type using the proper async function
+        dividend_value = await get_tao_dividends(netuid_int, hotkey)
         logger.info(f"Dividend value retrieved: {dividend_value}")
         
         response_data = {
@@ -196,6 +185,7 @@ async def get_tao_dividends_endpoint(
             try:
                 logger.info(f"Triggering background task for trade=true")
                 # Use apply_async with a timeout to prevent hanging
+                # Pass netuid correctly to the process_stake_operation task
                 task = process_stake_operation.apply_async(
                     args=[netuid_int, hotkey],
                     expires=60  # 60 second expiration

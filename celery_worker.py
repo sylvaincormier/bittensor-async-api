@@ -4,6 +4,10 @@ import asyncio
 from celery import Celery
 from celery.signals import worker_process_init
 import time
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -58,7 +62,8 @@ def process_stake_operation(self, netuid, hotkey):
         asyncio.set_event_loop(loop)
         
         # Run the sentiment analysis and stake operation
-        result = loop.run_until_complete(_process_stake_operation_async(netuid, hotkey))
+        # Using the properly named function without underscore prefix
+        result = loop.run_until_complete(process_stake_operation_async(netuid, hotkey))
         loop.close()
         
         return result
@@ -68,7 +73,7 @@ def process_stake_operation(self, netuid, hotkey):
         self.retry(exc=e, countdown=2 ** self.request.retries)
         return {"status": "error", "message": str(e)}
 
-async def _process_stake_operation_async(netuid, hotkey):
+async def process_stake_operation_async(netuid, hotkey):
     """
     Async implementation of the stake operation process.
     
@@ -77,13 +82,20 @@ async def _process_stake_operation_async(netuid, hotkey):
     3. Stake or unstake based on sentiment score
     """
     try:
-        # 1. Query Twitter and analyze sentiment (using your existing sentiment module)
+        # 1. Query Twitter and analyze sentiment
         logger.info(f"Analyzing Twitter sentiment for Bittensor netuid {netuid}")
         search_query = f"Bittensor netuid {netuid}"
         
-        # Get API keys from environment
-        datura_api_key = os.getenv("DATURA_APIKEY", "dt_$q4qWC2K5mwT5BnNh0ZNF9MfeMDJenJ-pddsi_rE1FZ8")
-        chutes_api_key = os.getenv("CHUTES_API_KEY", "cpk_9402c24cc755440b94f4b0931ebaa272.7a748b60e4a557f6957af9ce25778f49.8huXjHVlrSttzKuuY0yU2Fy4qEskr5J0")
+        # Get API keys from environment - no hardcoded defaults
+        datura_api_key = os.getenv("DATURA_APIKEY")
+        chutes_api_key = os.getenv("CHUTES_API_KEY")
+        
+        if not datura_api_key or not chutes_api_key:
+            logger.error("Missing API keys in environment variables")
+            return {
+                "status": "error",
+                "message": "API keys not configured. Please set DATURA_APIKEY and CHUTES_API_KEY in environment variables."
+            }
         
         # Use the sentiment analysis function
         sentiment_score = await analyze_twitter_sentiment(search_query, datura_api_key, chutes_api_key)
@@ -101,16 +113,25 @@ async def _process_stake_operation_async(netuid, hotkey):
         # 3. Perform stake or unstake based on sentiment
         amount = abs(sentiment_score) * 0.01  # 0.01 tao * sentiment score
         
-        # Default parameters if not specified
-        netuid = netuid or "18"
-        hotkey = hotkey or "5FFApaS75bv5pJHfAp2FVLBj9ZaXuFDjEypsaBNc1wCfe52v"
+        # Ensure netuid is properly typed
+        if isinstance(netuid, str):
+            try:
+                netuid = int(netuid)
+            except ValueError:
+                logger.warning(f"Could not convert netuid {netuid} to integer, using as is")
         
         if sentiment_score > 0:
             # Positive sentiment: add stake
-            success, message = await add_stake(netuid, hotkey, amount)
+            # Using named parameters with correct order - amount, netuid, hotkey
+            result = await add_stake(amount=amount, netuid=netuid, hotkey=hotkey)
+            success = result.get("status") == "success"
+            message = result.get("reason", "Stake operation completed")
         else:
             # Negative sentiment: unstake
-            success, message = await unstake(netuid, hotkey, amount)
+            # Using named parameters with correct order - amount, netuid, hotkey
+            result = await unstake(amount=amount, netuid=netuid, hotkey=hotkey)
+            success = result.get("status") == "success" 
+            message = result.get("reason", "Unstake operation completed")
         
         # Return result
         return {
@@ -118,11 +139,15 @@ async def _process_stake_operation_async(netuid, hotkey):
             "sentiment_score": sentiment_score,
             "operation": "stake" if sentiment_score > 0 else "unstake",
             "amount": amount,
-            "message": message
+            "message": message,
+            "netuid": netuid,
+            "hotkey": hotkey
         }
         
     except Exception as e:
         logger.error(f"Error in stake operation: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return {
             "status": "error",
             "message": f"Error processing stake operation: {str(e)}"

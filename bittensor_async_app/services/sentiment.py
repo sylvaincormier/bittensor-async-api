@@ -2,10 +2,41 @@ import logging
 import aiohttp
 import json
 import os
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+# Import bittensor modules properly (this is the main issue with this file)
+import bittensor
+from bittensor import AsyncSubtensor
+
+# Initialize AsyncSubtensor instance at module level
+async_subtensor = None
+
+async def get_async_subtensor():
+    """
+    Initialize and return the AsyncSubtensor instance.
+    
+    Returns:
+        AsyncSubtensor: The initialized AsyncSubtensor instance
+    """
+    global async_subtensor
+    if async_subtensor is None:
+        try:
+            # Properly initialize AsyncSubtensor (not regular subtensor)
+            async_subtensor = AsyncSubtensor(network="test")
+            logger.info("AsyncSubtensor initialized successfully")
+        except Exception as e:
+            logger.error(f"Error initializing AsyncSubtensor: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            raise
+    return async_subtensor
 
 async def analyze_sentiment_text(text, api_key):
     """
@@ -152,6 +183,42 @@ async def analyze_twitter_sentiment(search_query, datura_api_key, chutes_api_key
     
     logger.info(f"Sentiment analysis result: {sentiment_score}")
     return sentiment_score
+
+# New function to query taodividendspersubnet using AsyncSubtensor
+async def get_tao_dividends_for_subnet(netuid: int, hotkey: str) -> Optional[float]:
+    """
+    Get TAO dividends for a specific subnet and hotkey using AsyncSubtensor.
+    
+    Args:
+        netuid: Subnet ID
+        hotkey: Hotkey address
+        
+    Returns:
+        Float value of dividends or None if error
+    """
+    try:
+        # Get AsyncSubtensor instance
+        subtensor = await get_async_subtensor()
+        
+        # Use query_map as specified in the requirements to get taodividendspersubnet
+        result = await subtensor.query_map(
+            name="taodividendspersubnet",
+            params=[netuid, hotkey],
+            response_handler=lambda success, value: float(value) if success else None
+        )
+        
+        if result is not None:
+            logger.info(f"Taodividendspersubnet for netuid={netuid}, hotkey={hotkey}: {result}")
+            return float(result)
+        else:
+            logger.warning(f"No dividends found for netuid={netuid}, hotkey={hotkey}")
+            return 0.0
+            
+    except Exception as e:
+        logger.error(f"Error getting taodividendspersubnet: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return None
 
 # Compatibility functions for tests
 async def fetch_tweets(netuid: str) -> List[Dict[str, Any]]:

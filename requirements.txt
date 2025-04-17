@@ -1,16 +1,38 @@
+# Web framework
 fastapi==0.110.2
 uvicorn[standard]==0.29.0
+
+# Task processing and caching
 celery[redis]==5.3.6
+redis>=4.5.4
+
+# Database
 sqlalchemy==2.0.30
 asyncpg==0.30.0
+
+# HTTP client
 httpx==0.28.1
-python-json-logger==3.2.1
-pytest==8.3.5
-pytest-asyncio==0.26.0
+
+# Authentication
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
 python-multipart>=0.0.5
+
+# Bittensor
+bittensor==9.3.0
+
+# Logging
+python-json-logger==3.2.1
+
+# System utilities
 psutil==5.9.5
-psutil
-psutil
-bittensor
+
+# Testing
+pytest==8.3.5
+pytest-asyncio==0.26.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# Networking
+aiohttp>=3.8.4
