@@ -18,14 +18,51 @@ import bittensor_async_app.services.bittensor_client as bittensor_client
 # Import Celery tasks
 from celery_worker import process_stake_operation
 
+# Import auth module
+try:
+    # Try from the package first
+    from bittensor_async_app.auth import initialize_from_env, create_access_token, Token, jwt, SECRET_KEY, ALGORITHM
+    auth_available = True
+    logger.info("JWT authentication module available from package")
+except ImportError as e:
+    try:
+        # Fall back to root directory
+        import sys
+        sys.path.insert(0, '.')  # Add root directory to path
+        from auth import initialize_from_env, create_access_token, Token, jwt, SECRET_KEY, ALGORITHM
+        auth_available = True
+        logger.info("JWT authentication module available from root")
+    except ImportError as e2:
+        auth_available = False
+        logger.error(f"JWT authentication not available: {e2}")
+        logger.error(traceback.format_exc())
+
 # Import minimal auth module (comment out if it doesn't exist yet)
 try:
-    from bittensor_async_app.auth import initialize_from_env, create_access_token, Token
+    import sys
+    sys.path.insert(0, '.')  # Add root directory to path
+    from auth import initialize_from_env, create_access_token, Token, jwt, SECRET_KEY, ALGORITHM
     auth_available = True
     logger.info("JWT authentication module available")
-except ImportError:
+except ImportError as e:
     auth_available = False
-    logger.warning("JWT authentication module not available, using legacy auth only")
+    logger.warning(f"JWT authentication module not available, using legacy auth only: {e}")
+
+def get_jwt_from_header(token: str):
+    """Parse and validate a JWT token."""
+    if not auth_available:
+        logger.info("JWT auth not available, skipping")
+        return None
+    
+    try:
+        logger.info("Decoding JWT token")
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        logger.info(f"JWT decoded successfully: {payload}")
+        return payload
+    except Exception as e:
+        logger.error(f"JWT validation failed: {str(e)}")
+        logger.error(f"Token being validated: {token[:15]}...")
+        return None
 
 app = FastAPI(
     title="Bittensor Async API",
@@ -50,46 +87,67 @@ class TaoDividendResponse(BaseModel):
     status: Optional[str] = None
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Simple Bearer token verification."""
+    """Verify token using either legacy or JWT authentication."""
     token = credentials.credentials
-    if token not in VALID_TOKENS:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,  # Change from 401 to 403
-            detail="Invalid or missing token"
-        )
-    return token
+    logger.info(f"Verifying token: {token[:10]}...")
+    
+    # Try JWT authentication first
+    logger.info("Attempting JWT validation")
+    jwt_payload = get_jwt_from_header(token)
+    if jwt_payload:
+        logger.info(f"JWT validation successful for user: {jwt_payload.get('sub')}")
+        return token
+    else:
+        logger.info("JWT validation failed, falling back to legacy token")
+    
+    # Fall back to legacy token
+    if token in VALID_TOKENS:
+        logger.info("Legacy token validation successful")
+        return token
+    
+    # Neither JWT nor legacy token is valid
+    logger.warning("All authentication methods failed")
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Invalid or missing token"
+    )
 
-# Optional JWT token endpoint - only available if auth module is present
-if auth_available:
-    @app.post("/token", response_model=Token)
-    async def get_token(request: Request):
-        """Get a JWT token from a legacy API token."""
-        # Get Authorization header
-        auth_header = request.headers.get("Authorization")
+# Token endpoint defined outside the conditional block
+@app.post("/token")
+async def get_token(request: Request):
+    """Get a JWT token from a legacy API token."""
+    if not auth_available:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="JWT authentication not available"
+        )
         
-        if not auth_header or not auth_header.startswith("Bearer "):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid authentication credentials",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        
-        # Extract token
-        token = auth_header.replace("Bearer ", "")
-        
-        # Check if it's a valid legacy token
-        if token in VALID_TOKENS:
-            # Create a JWT token with all permissions
-            access_token = create_access_token(
-                data={"sub": "api_user", "scopes": ["read", "stake", "admin"]}
-            )
-            return {"access_token": access_token, "token_type": "bearer"}
-        
+    # Get Authorization header
+    auth_header = request.headers.get("Authorization")
+    
+    if not auth_header or not auth_header.startswith("Bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token",
+            detail="Invalid authentication credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    
+    # Extract token
+    token = auth_header.replace("Bearer ", "")
+    
+    # Check if it's a valid legacy token
+    if token in VALID_TOKENS:
+        # Create a JWT token with all permissions
+        access_token = create_access_token(
+            data={"sub": "api_user", "scopes": ["read", "stake", "admin"]}
+        )
+        return {"access_token": access_token, "token_type": "bearer"}
+    
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid token",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 @app.get("/api/v1/tao_dividends", response_model=TaoDividendResponse)
 async def get_tao_dividends_endpoint(
