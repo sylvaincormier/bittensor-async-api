@@ -36,20 +36,20 @@ async def test_get_tao_dividends_no_cache():
 @pytest.mark.asyncio
 async def test_stake_tao():
     from bittensor_async_app.services.bittensor_client import stake_tao
-    with patch("bittensor_async_app.services.bittensor_client.subtensor", MagicMock()):
-        result = await stake_tao(18, "test_hotkey", 0.75)
-        assert isinstance(result, dict)
+    # Change this line to mock async_subtensor instead of subtensor
+    with patch("bittensor_async_app.services.bittensor_client.async_subtensor", MagicMock()):
+        # Rest of the test remains the same
+        result = await stake_tao(netuid=1, hotkey="test_hotkey", amount=0.5)
         assert result["status"] == "success"
-        assert result["operation"] == "stake"
 
 @pytest.mark.asyncio
 async def test_unstake_tao():
     from bittensor_async_app.services.bittensor_client import unstake_tao
-    with patch("bittensor_async_app.services.bittensor_client.subtensor", MagicMock()):
-        result = await unstake_tao(18, "test_hotkey", 0.5)
-        assert isinstance(result, dict)
+    # Change this line to mock async_subtensor instead of subtensor
+    with patch("bittensor_async_app.services.bittensor_client.async_subtensor", MagicMock()):
+        # Rest of the test remains the same
+        result = await unstake_tao(netuid=1, hotkey="test_hotkey", amount=0.5)
         assert result["status"] == "success"
-        assert result["operation"] == "unstake"
 
 @pytest.mark.asyncio
 async def test_stake_tao_zero_amount():

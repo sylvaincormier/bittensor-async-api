@@ -22,7 +22,6 @@ import redis.asyncio as redis
 
 # Module-level variables for test compatibility
 redis_client = None
-subtensor = None
 async_subtensor = None
 is_initialized = False  # Track initialization status
 
@@ -51,13 +50,13 @@ class BitensorClient:
     
     def __init__(self):
         """Initialize the Bittensor client."""
-        self.subtensor = None
-        self.async_subtensor = None  # Properly define AsyncSubtensor
+        self.async_subtensor = None  # Use only AsyncSubtensor, not regular subtensor
         self.wallet = None
         self.is_initialized = False
         self.initialization_error = None
         self.last_init_attempt = 0
         self.init_retry_interval = 60  # seconds between retry attempts
+        self._last_query_simulated = False
         
         # Default values from environment
         self.default_netuid = int(os.getenv("NETUID", 18))
@@ -80,7 +79,7 @@ class BitensorClient:
         """
         Initialize the connection to the Bittensor blockchain.
         
-        This method sets up the subtensor instance and wallet.
+        This method sets up the AsyncSubtensor instance and wallet.
         It's called automatically when the client is created.
         
         Returns:
@@ -121,18 +120,17 @@ class BitensorClient:
                         hotkey=os.getenv("WALLET_HOTKEY", "default")
                     )
                 
-                # Connect to the testnet using both regular subtensor and AsyncSubtensor
-                self.subtensor = bittensor.subtensor(network="test")
-                self.async_subtensor = AsyncSubtensor(network="test")  # Properly initialize AsyncSubtensor
+                # Connect to the testnet using only AsyncSubtensor
+                self.async_subtensor = AsyncSubtensor(network="test")
                 
-                # Verify the connection works by getting current block
-                current_block = self.subtensor.get_current_block()
+                # Verify the connection works by getting current block asynchronously
+                # Note: We need to use an async call here instead of a blocking call
+                current_block = await self.async_subtensor.get_current_block()
                 logger.info(f"Connected to Bittensor testnet, current block: {current_block}")
                 
                 # Set global variables for test compatibility
-                global subtensor, async_subtensor, is_initialized
-                subtensor = self.subtensor
-                async_subtensor = self.async_subtensor  # Set the async_subtensor
+                global async_subtensor, is_initialized
+                async_subtensor = self.async_subtensor
                 is_initialized = True
                 
                 logger.info(f"Bittensor client initialized successfully")
@@ -175,9 +173,9 @@ class BitensorClient:
     
     async def get_tao_dividends(self, netuid: Optional[Union[int, str]] = None, hotkey: Optional[str] = None) -> float:
         """
-        Get Tao dividends for a specific subnet and hotkey.
+        Get Tao dividends for a specific subnet and hotkey directly from the blockchain.
         
-        As AsyncSubtensor.query_map is not working with our API, we always use simulation.
+        Uses AsyncSubtensor.query_map to get taodividendspersubnet.
         
         Args:
             netuid: The subnet ID (defaults to environment variable or 18)
@@ -186,6 +184,9 @@ class BitensorClient:
         Returns:
             Float value representing the dividend amount
         """
+        # Reset simulation flag
+        self._last_query_simulated = False
+        
         # Check cache first
         try:
             redis = await get_redis_client()
@@ -210,13 +211,49 @@ class BitensorClient:
                 logger.warning(f"Invalid netuid format '{netuid}', using default")
                 netuid = self.default_netuid
         
+        # Ensure initialization
+        is_init = await self.ensure_initialized()
+        if not is_init:
+            logger.warning("Client not initialized, using simulation")
+            self._last_query_simulated = True
+            dividend_value = await simulate_dividend_query(netuid, hotkey)
+            return dividend_value
+        
         logger.info(f"Querying Tao dividends for netuid={netuid}, hotkey={hotkey}")
+        
+        try:
+            # Use AsyncSubtensor.query_map to get taodividendspersubnet as per instructions
+            # The correct method call as per the documentation
+            dividend_value = await self.async_subtensor.query_map(
+                name="SubtensorModule",  # Module name
+                map_name="taodividendspersubnet",  # Map name
+                key1=netuid,  # First key (subnet ID)
+                key2=hotkey  # Second key (hotkey)
+            )
             
-        # Since the API call is not working, just use simulation directly
+            if dividend_value is not None:
+                # Convert to float and ensure it's a reasonable value
+                dividend_value = float(dividend_value)
+                logger.info(f"Found real dividend value: {dividend_value}")
+                
+                # Cache the result
+                try:
+                    redis = await get_redis_client()
+                    cache_key = f"dividends:{netuid}:{hotkey}"
+                    await redis.set(cache_key, str(dividend_value), ex=120)  # Cache for 2 minutes
+                except Exception as e:
+                    logger.warning(f"Error caching result: {str(e)}")
+                
+                return dividend_value
+        except Exception as e:
+            logger.error(f"Error in get_tao_dividends: {str(e)}")
+        
+        # Fall back to simulation if we couldn't get real data
+        logger.info("Using simulation as fallback")
+        self._last_query_simulated = True
         dividend_value = await simulate_dividend_query(netuid, hotkey)
-        logger.info(f"Simulated dividend value: {dividend_value}")
-            
-        # Try to cache the result
+        
+        # Cache the simulated result
         try:
             redis = await get_redis_client()
             cache_key = f"dividends:{netuid}:{hotkey}"
@@ -276,20 +313,34 @@ class BitensorClient:
             # Convert amount to proper units for the blockchain
             amount_rao = int(amount * 1_000_000_000)  # Convert TAO to RAO (blockchain units)
             
-            # Submit the stake extrinsic using AsyncSubtensor
-            tx_hash = await self.async_subtensor.add_stake(
-                wallet=self.wallet,
-                hotkey=hotkey,
-                amount=amount_rao,
-                netuid=netuid  # Explicitly provide netuid
-            )
+            # Store current hotkey to restore later if needed
+            current_hotkey = self.wallet.hotkey_str
             
-            logger.info(f"Stake added successfully: {tx_hash}")
-            return {
-                "status": "success", 
-                "tx_hash": tx_hash, 
-                "operation": "stake"
-            }
+            try:
+                # Set the wallet's hotkey if different from current
+                if current_hotkey != hotkey:
+                    self.wallet.set_hotkey(hotkey)
+                    logger.info(f"Set wallet hotkey to {hotkey} for staking")
+                
+                # Submit the stake extrinsic using AsyncSubtensor with correct parameters
+                # The parameters should match the AsyncSubtensor.add_stake signature
+                tx_hash = await self.async_subtensor.add_stake(
+                    wallet=self.wallet,
+                    amount=amount_rao,
+                    netuid=netuid  # Explicitly provide netuid
+                )
+                
+                logger.info(f"Stake added successfully: {tx_hash}")
+                return {
+                    "status": "success", 
+                    "tx_hash": tx_hash, 
+                    "operation": "stake"
+                }
+            finally:
+                # Restore original hotkey if we changed it
+                if current_hotkey != hotkey:
+                    self.wallet.set_hotkey(current_hotkey)
+                    logger.info(f"Restored wallet hotkey to {current_hotkey}")
             
         except Exception as e:
             logger.error(f"Error in add_stake: {str(e)}")
@@ -349,21 +400,35 @@ class BitensorClient:
             # Convert amount to proper units for the blockchain
             amount_rao = int(amount * 1_000_000_000)  # Convert TAO to RAO (blockchain units)
             
-            # Submit the unstake extrinsic using AsyncSubtensor
-            tx_hash = await self.async_subtensor.unstake(
-                wallet=self.wallet,
-                hotkey=hotkey,
-                amount=amount_rao,
-                netuid=netuid  # Explicitly provide netuid
-            )
+            # Store current hotkey to restore later if needed
+            current_hotkey = self.wallet.hotkey_str
             
-            logger.info(f"Stake removed successfully: {tx_hash}")
-            return {
-                "status": "success", 
-                "tx_hash": tx_hash, 
-                "operation": "unstake"
-            }
-            
+            try:
+                # Set the wallet's hotkey if different from current
+                if current_hotkey != hotkey:
+                    self.wallet.set_hotkey(hotkey)
+                    logger.info(f"Set wallet hotkey to {hotkey} for unstaking")
+                
+                # Submit the unstake extrinsic using AsyncSubtensor with correct parameters
+                # The parameters should match the AsyncSubtensor.unstake signature
+                tx_hash = await self.async_subtensor.unstake(
+                    wallet=self.wallet,
+                    amount=amount_rao,
+                    netuid=netuid  # Explicitly provide netuid
+                )
+                
+                logger.info(f"Stake removed successfully: {tx_hash}")
+                return {
+                    "status": "success", 
+                    "tx_hash": tx_hash, 
+                    "operation": "unstake"
+                }
+            finally:
+                # Restore original hotkey if we changed it
+                if current_hotkey != hotkey:
+                    self.wallet.set_hotkey(current_hotkey)
+                    logger.info(f"Restored wallet hotkey to {current_hotkey}")
+                
         except Exception as e:
             logger.error(f"Error in unstake: {str(e)}")
             return {
