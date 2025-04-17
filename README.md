@@ -1,4 +1,3 @@
-
 # Bittensor Async API
 
 An asynchronous API service for querying Tao dividends from the Bittensor blockchain with sentiment analysis-based trading capabilities.
@@ -77,8 +76,8 @@ To run the service without Docker:
 
 ```bash
 # Create and activate a virtual environment
-python -m venv .venv
-source .venv/bin/activate
+python3 -m venv venv
+source venv/bin/activate
 
 # Install dependencies
 pip install -r requirements.txt
@@ -175,7 +174,7 @@ curl -X GET "http://localhost:8000/api/v1/tao_dividends?netuid=18" \
 
 ## Blockchain Integration
 
-The system connects to the Bittensor testnet and queries real-time blockchain data for dividends. For subnet 18, it retrieves all neurons and searches for the specific hotkey to find dividend information.
+The system connects to the Bittensor testnet and queries real-time blockchain data for dividends using AsyncSubtensor with the query_map method to efficiently retrieve taodividendspersubnet data.
 
 For real blockchain transactions (staking/unstaking), you need:
 
@@ -243,10 +242,37 @@ Throughput: 1824.57 requests/second
 
 These results demonstrate the API meets production-grade requirements for handling 1000+ concurrent connections with excellent response times and 100% reliability.
 
-You can run the load test yourself using the included script:
+### Running the Load Test
+
+You can run the load test with these steps:
 
 ```bash
+# Create a virtual environment
+python3 -m venv venv
+
+# Activate it
+source venv/bin/activate
+
+# Install dependencies
+pip install aiohttp pandas matplotlib seaborn
+
+# Run the load tester
+cd scripts
 python load_tester.py --endpoint "http://localhost:8000/api/v1/tao_dividends" --token datura --concurrency 1000 --requests 2000
+```
+
+Alternatively, you can run the load test directly from the Docker container:
+
+```bash
+# Copy the load tester to the container
+docker cp scripts/load_tester.py bittensor-async-api-api-1:/app/load_tester.py
+
+# Run the load test
+docker exec bittensor-async-api-api-1 python /app/load_tester.py \
+  --endpoint "http://api:8000/api/v1/tao_dividends" \
+  --concurrency 1000 \
+  --requests 2000 \
+  --token "datura"
 ```
 
 ## License
